@@ -1,44 +1,55 @@
 <?php
+namespace vk;
+use Exception as VkException;
+include './vendor/autoload.php';
 /*
  * Class Vk
- * author: Dmitriy Nyashkin
+ * @author: Dmitriy Nyashkin
+ * @link: https://github.com/fdcore/vk.api
+ * @version: 2.0
  */
-class Vk{
 
-    const API_VERSION = '5.24';
+// Возвращаемые ошибки https://vk.com/dev/errors
+
+class Vk {
+
+    private $v = '5.69'; // версия Api VKontakte @link https://vk.com/dev/versions
+    const VERSION = '2.0'; // версия этой библиотеки
 
     const CALLBACK_BLANK = 'https://oauth.vk.com/blank.html';
-    const AUTHORIZE_URL = 'https://oauth.vk.com/authorize?client_id={client_id}&scope={scope}&redirect_uri={redirect_uri}&display={display}&v=5.24&response_type={response_type}';
-    const GET_TOKEN_URL = 'https://oauth.vk.com/access_token?client_id={client_id}&client_secret={client_secret}&code={code}&redirect_uri={redirect_uri}';
-    const METHOD_URL = 'https://api.vk.com/method/';
-    
-    
-    public $secret_key = null;
-    public $scope = array();
-    public $client_id = null;
-    public $access_token = null;
-    public $owner_id = 0;
+    const AUTHORIZE_URL  = 'https://oauth.vk.com/authorize?';
+    const GET_TOKEN_URL  = 'https://oauth.vk.com/access_token?';
+    const METHOD_URL     = 'https://api.vk.com/method/';
+
+    public $secret_key  = null;
+    public $scope       = [];
+    public $client_id   = null;
+    public $access_token= null;
+    public $owner_id    = 0;
+    public $debug       = false;
+    private $_api_scope = '';
 
     /**
      * Это Конструктор (Кэп.)
      * Передаются параметры настроек
      * @param array $options
      */
-    function __construct($options = array()){
+    function __construct( $options = [] ){
 
-        $this->scope[]='offline';
+        $this->scope[]='offline'; // обязательно запрашиваем права на оффлайн работу без участия пользователя
 
-        if(count($options) > 0){
-            foreach($options as $key => $value){
-                if($key == 'scope' && is_string($value)){
-                    $_scope = explode(',', $value);
-                    $this->scope = array_merge($this->scope, $_scope);
-                } else {
-                    $this->$key = $value;
-                }
+        $this->set_options($options);
+    }
 
-            }
-        }
+    // Magic Method (*__*)
+    function __call($method, $params){
+        if(!isset($params[0])) $params[0] = [];
+        return $this->api($this->_api_scope . '.' . $method, $params[0]);
+    }
+
+    function  __get($name){
+        $this->_api_scope = $name;
+        return $this;
     }
 
     /**
@@ -47,17 +58,23 @@ class Vk{
      * @param array $vars - параметры метода
      * @return array - выводит массив данных или ошибку (но тоже в массиве)
      */
-    function api($method = '', $vars = array()){
-        
-        $vars['v'] = self::API_VERSION;
-        
+    public function api($method = '', array $vars = []){
+
+        $vars['v']            = $this->v;
+        $vars['access_token'] = $this->access_token;
+
         $params = http_build_query($vars);
+        $url    = $this->http_build_query($method, $params);
 
-        $url = $this->http_build_query($method, $params);
+        // Для тестирования и отладки запросов
+        if($this->debug) return $url;
 
-        return (array)$this->call($url);
+        return $this->call($url);
     }
 
+    public function execute($code){
+        return $this->api('execute', array('code' => $code));
+    }
 
     /**
      * Построение конечного URI для выхова
@@ -66,66 +83,67 @@ class Vk{
      * @return string
      */
     private function http_build_query($method, $params = ''){
-        return  self::METHOD_URL . $method . '?' . $params.'&access_token=' . $this->access_token;
+        return  self::METHOD_URL . $method . '?' . $params;
     }
 
     /**
      * Получить ссылка на запрос прав доступа
      *
      * @param string $type тип ответа (code - одноразовый код авторизации , token - готовый access token)
+     * @param string callback url
      * @return mixed
      */
-    public function get_code_token($type="code"){
+    public function get_code_token( $type  = "token", $callback = self::CALLBACK_BLANK ){
 
         $url = self::AUTHORIZE_URL;
-
-        $scope = implode(',', $this->scope);
-
-        $url = str_replace('{client_id}', $this->client_id, $url);
-        $url = str_replace('{scope}', $scope, $url);
-        $url = str_replace('{redirect_uri}', self::CALLBACK_BLANK, $url);
-        $url = str_replace('{display}', 'page', $url);
-        $url = str_replace('{response_type}', $type, $url);
+        $url .= http_build_query(array(
+            'response_type' => $type,
+            'client_id'     => $this->client_id,
+            'redirect_uri'  => $callback,
+            'display'       => 'page',
+            'version'       => $this->v,
+            'scope'         => implode(',', $this->scope),
+        ));
 
         return $url;
-
     }
 
-    public function get_token($code){
+    public function get_access_token($code, $callback = self::CALLBACK_BLANK ){
 
         $url = self::GET_TOKEN_URL;
-        $url = str_replace('{code}', $code, $url);
-        $url = str_replace('{client_id}', $this->client_id, $url);
-        $url = str_replace('{client_secret}', $this->secret_key, $url);
-        $url = str_replace('{redirect_uri}', self::CALLBACK_BLANK, $url);
+
+        $url .= http_build_query(array(
+            'code'          => $code,
+            'client_id'     => $this->client_id,
+            'redirect_uri'  => $callback,
+            'client_secret' => $this->secret_key,
+            'version'       => $this->v,
+            'scope'         => implode(',', $this->scope),
+        ));
 
         return $this->call($url);
     }
 
-    function call($url = ''){
+    private function call($url = ''){
 
         if(function_exists('curl_init')) $json = $this->curl_post($url); else $json = file_get_contents($url);
 
         $json = json_decode($json, true);
+
+        // Произошла ошибка на стороне VK, коды ошибок тут https://vk.com/dev/errors
+        if(isset($json['error'], $json['error']['error_msg'], $json['error']['error_code'])){
+
+            throw new VkException($json['error']['error_msg'], $json['error']['error_code']);
+        }
 
         if(isset($json['response'])) return $json['response'];
 
         return $json;
     }
 
-    // @deprecated
-    private function curl_get($url)
-    {
-        if(!function_exists('curl_init')) return false;
-
-        $ch = curl_init($url);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
-        $tmp = curl_exec ($ch);
-        curl_close ($ch);
-        $tmp = preg_replace('/(?s)<meta http-equiv="Expires"[^>]*>/i', '', $tmp);
-        return $tmp;
-    }
-
+    /*
+      Send cURL POST request
+    */
     private function curl_post($url){
 
         if(!function_exists('curl_init')) return false;
@@ -138,6 +156,8 @@ class Vk{
             curl_setopt($curl, CURLOPT_RETURNTRANSFER,true);
             curl_setopt($curl, CURLOPT_POST, true);
             curl_setopt($curl, CURLOPT_POSTFIELDS, $param['query']);
+            curl_setopt($curl, CURLOPT_SSL_VERIFYPEER ,false);
+
             $out = curl_exec($curl);
 
             curl_close($curl);
@@ -147,10 +167,11 @@ class Vk{
 
         return false;
     }
+
     /**
      * @param array $options
      */
-    public function set_options($options = array()){
+    public function set_options($options = []){
 
         if(count($options) > 0){
             foreach($options as $key => $value){
@@ -169,9 +190,13 @@ class Vk{
     /**
      * @param bool $gid
      * @param array $files
+     * @param bool (TRUE = вернутть список ссылок загруженных на сервер изображений | FALSE = выводить по дальнейшим параметрам)
+     * @param bool (TRUE = вернуть список id файлов | FALSE = вернуть массив аттачей для прикрепления)
+     * @param array $additional_data {latitude, longitude, caption}
+     * @param int $usleep сколько спать в микросекундах между запросами
      * @return array|bool
      */
-    function upload_photo($gid = false, $files = array()){
+    public function upload_photo($gid = 0, array $files = [], $return_link=false, $return_ids = false, array $additional_data = [], $usleep = 0){
 
         if(count($files) == 0) return false;
         if(!function_exists('curl_init')) return false;
@@ -180,42 +205,61 @@ class Vk{
 
         if(!isset($data_json['upload_url'])) return false;
 
-        $temp = array_chunk($files, 4);
+        $temp = array_chunk($files, 4); // лимит файлов
 
-        $files = array();
-        $attachments = array();
 
-        foreach ($temp[0] as $key => $data) {
-            $path = realpath($data);
+        $attachments = [];
 
-            if($path){
-              $files['file' . ($key+1)] = (class_exists('CURLFile', false)) ? new CURLFile(realpath($data)) : '@' . realpath($data);
+        foreach($temp as $chunk_index => $temp_chunk){
+
+            if($chunk_index) usleep($usleep);
+
+            $files = [];
+
+            foreach ($temp_chunk as $key => $data) {
+                $path = realpath($data);
+
+                if($path){
+                    $files['file' . ($key+1)] = (class_exists('\CURLFile', false)) ? new \CURLFile(realpath($data)) : '@' . realpath($data);
+                }
             }
+
+            $upload_url = $data_json['upload_url'];
+
+            $ch = curl_init($upload_url);
+
+            curl_setopt($ch, CURLOPT_HTTPHEADER, array("Content-type: multipart/form-data"));
+            curl_setopt($ch, CURLOPT_HEADER, 0);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+            curl_setopt($ch, CURLOPT_USERAGENT, "Mozilla/4.0 (compatible;)");
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $files);
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+
+            $upload_data = json_decode(curl_exec($ch), true);
+
+            $upload_data['group_id'] = intval($gid);
+
+            $upload_data += $additional_data;
+
+            usleep($usleep);
+
+            $response = $this->api('photos.saveWallPhoto', $upload_data);
+
+            if(count($response) > 0){
+
+                foreach($response as $photo){
+                    if ($return_link)
+                        $attachments[] = $photo['photo_604'];
+                    else if($return_ids)
+                        $attachments[] = $photo['id'];
+                    else
+                        $attachments[] = 'photo'.$photo['owner_id'].'_'.$photo['id'];
+
+                }
+            }
+
         }
 
-        $upload_url = $data_json['upload_url'];
-
-        $ch = curl_init($upload_url);
-        curl_setopt($ch, CURLOPT_HTTPHEADER, array("Content-type: multipart/form-data"));
-        curl_setopt($ch, CURLOPT_HEADER, 0);
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
-        curl_setopt($ch, CURLOPT_USERAGENT, "Mozilla/4.0 (compatible;)");
-        curl_setopt($ch, CURLOPT_POSTFIELDS, $files);
-
-        $upload_data = json_decode(curl_exec($ch), true);
-
-        $upload_data['group_id'] = intval($gid);
-        
-        $response = $this->api('photos.saveWallPhoto', $upload_data);
-
-        if(count($response) > 0){
-        
-            foreach($response as $photo){
-        
-                $attachments[] = 'photo'.$photo['owner_id'].'_'.$photo['id'];
-            }
-        }
-        
         return $attachments;
 
     }
@@ -227,14 +271,12 @@ class Vk{
      * @param $file
      * @return bool|string
      */
-    function upload_doc($gid = false, $file){
+    public function upload_doc($gid = false, $file){
 
         if(!is_string($file)) return false;
         if(!function_exists('curl_init')) return false;
 
         $data_json = $this->api('docs.getUploadServer', array('gid'=> intval($gid)));
-
-        var_dump($data_json);
 
         if(!isset($data_json['upload_url'])) return false;
 
@@ -244,7 +286,7 @@ class Vk{
 
         if(!$path) return false;
 
-        $files['file'] = (class_exists('CURLFile', false)) ? new CURLFile($file) : '@' . $file;
+        $files['file'] = (class_exists('\CURLFile', false)) ? new \CURLFile($file) : '@' . $file;
 
         $upload_url = $data_json['upload_url'];
 
@@ -254,6 +296,7 @@ class Vk{
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
         curl_setopt($ch, CURLOPT_USERAGENT, "Mozilla/4.0 (compatible;)");
         curl_setopt($ch, CURLOPT_POSTFIELDS, $files);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
 
         $upload_data = json_decode(curl_exec($ch), true);
 
@@ -281,7 +324,7 @@ class Vk{
      * @param bool $file
      * @return bool|string
      */
-    function upload_video($options = array(), $file = false){
+    public function upload_video($options = [], $file = false){
 
         if(!is_array($options)) return false;
         if(!function_exists('curl_init')) return false;
@@ -299,6 +342,7 @@ class Vk{
         curl_setopt($ch, CURLOPT_HEADER, 0);
         curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
         curl_setopt($ch, CURLOPT_USERAGENT, "Mozilla/4.0 (compatible;)");
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
 
         // если указан файл то заливаем его отправкой POST переменной video_file
         if($file && file_exists($file)){
@@ -307,12 +351,12 @@ class Vk{
 
             if(!$path) return false;
 
-            $files['video_file'] = (class_exists('CURLFile', false)) ? new CURLFile($file) : '@' . $file;
+            $files['video_file'] = (class_exists('\CURLFile', false)) ? new \CURLFile($file) : '@' . $file;
 
             curl_setopt($ch, CURLOPT_POSTFIELDS, $files);
             curl_exec($ch);
 
-        // иначе просто обращаемся по адресу (ну надо так!)
+            // иначе просто обращаемся по адресу (ну надо так!)
         } else {
 
             curl_exec($ch);
@@ -322,4 +366,25 @@ class Vk{
 
     }
 
+    /**
+     * Загружает видео из массива ссылок
+     *
+     * @param array $videos — массив ссылок на видео (youtube/vimeo)
+     * @return array — массив загруженных видео (прикреплений) для использования при постинге
+     */
+    public function uploadVideosFromArray(array $videos){
+
+        $attached_videos = [];
+
+        foreach($videos as $i => $video_url) {
+            $attached_videos[] = $this->upload_video(
+                [
+                    'link' => $video_url,
+                    'wallpost' => 0
+                ]
+            );
+        }
+
+        return $attached_videos;
+    }
 }
